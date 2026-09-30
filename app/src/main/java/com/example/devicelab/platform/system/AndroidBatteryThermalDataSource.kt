@@ -8,9 +8,11 @@ import android.os.BatteryManager
 import android.os.Build
 import android.os.PowerManager
 import com.example.devicelab.domain.model.BatteryHealth
+import com.example.devicelab.domain.model.BatterySnapshot
 import com.example.devicelab.domain.model.BatterySpecs
 import com.example.devicelab.domain.model.ChargingStatus
 import com.example.devicelab.domain.model.PluggedType
+import com.example.devicelab.domain.model.ThermalSnapshot
 import com.example.devicelab.domain.model.ThermalSpecs
 import com.example.devicelab.domain.model.ThermalStatus
 import com.example.devicelab.domain.repository.BatteryThermalDataSource
@@ -28,6 +30,58 @@ class AndroidBatteryThermalDataSource(
         val battery = parseBatteryIntent(getStickyBatteryIntent())
         val thermal = queryCurrentThermalSpecs()
         return battery to thermal
+    }
+
+    override fun getBatterySnapshot(): BatterySnapshot {
+        val intent = getStickyBatteryIntent()
+        val specs = parseBatteryIntent(intent)
+        val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+
+        val currentMicroamps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP && batteryManager != null) {
+            val cur = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+            if (cur != Int.MIN_VALUE) cur else null
+        } else {
+            null
+        }
+
+        val technology = intent?.getStringExtra(BatteryManager.EXTRA_TECHNOLOGY)
+
+        return BatterySnapshot(
+            percentage = specs.percentage,
+            chargingStatus = specs.chargingStatus,
+            pluggedType = specs.pluggedType,
+            health = specs.health,
+            temperatureCelsius = specs.temperatureCelsius,
+            voltageMillivolts = specs.voltageMillivolts,
+            currentMicroamps = currentMicroamps,
+            technology = technology,
+            capacityMah = null
+        )
+    }
+
+    override fun getThermalSnapshot(): ThermalSnapshot {
+        val thermalSpecs = queryCurrentThermalSpecs()
+        val isThrottling = thermalSpecs.status in listOf(
+            ThermalStatus.SEVERE,
+            ThermalStatus.CRITICAL,
+            ThermalStatus.EMERGENCY,
+            ThermalStatus.SHUTDOWN
+        )
+        val desc = when (thermalSpecs.status) {
+            ThermalStatus.NONE -> "Silicon within nominal operating limits"
+            ThermalStatus.LIGHT -> "Slight thermal elevation, no throttling"
+            ThermalStatus.MODERATE -> "Moderate temperature, approaching threshold"
+            ThermalStatus.SEVERE -> "Active thermal throttling, clock rates capped"
+            ThermalStatus.CRITICAL -> "Critical thermal condition, heavy throttling"
+            ThermalStatus.EMERGENCY -> "Emergency state, hardware protection engaged"
+            ThermalStatus.SHUTDOWN -> "Device shutdown imminent due to heat"
+            ThermalStatus.NOT_SUPPORTED -> "Thermal status API not supported on this device"
+        }
+        return ThermalSnapshot(
+            status = thermalSpecs.status,
+            statusDescription = desc,
+            isThrottling = isThrottling
+        )
     }
 
     override fun observeBatteryAndThermal(): Flow<Pair<BatterySpecs, ThermalSpecs>> = callbackFlow {

@@ -97,7 +97,7 @@ class DashboardViewModelTest {
             override suspend fun refreshTelemetry(): DashboardTelemetry = sampleTelemetry
         }
 
-        val viewModel = DashboardViewModel(repository)
+        val viewModel = DashboardViewModel(repository, minEntranceDurationMs = 0L)
 
         val collectJob = launch { viewModel.uiState.collect {} }
 
@@ -124,7 +124,7 @@ class DashboardViewModelTest {
             }
         }
 
-        val viewModel = DashboardViewModel(repository)
+        val viewModel = DashboardViewModel(repository, minEntranceDurationMs = 0L)
         val collectJob = launch { viewModel.uiState.collect {} }
 
         viewModel.refresh()
@@ -144,7 +144,7 @@ class DashboardViewModelTest {
             override suspend fun refreshTelemetry(): DashboardTelemetry = sampleTelemetry
         }
 
-        val viewModel = DashboardViewModel(repository)
+        val viewModel = DashboardViewModel(repository, minEntranceDurationMs = 0L)
         val collectJob = launch { viewModel.uiState.collect {} }
 
         val state = viewModel.uiState.value
@@ -153,4 +153,50 @@ class DashboardViewModelTest {
 
         collectJob.cancel()
     }
+
+    @Test
+    fun uiState_withInitialTelemetry_startsInSuccessState() = runTest(testDispatcher) {
+        val flow = MutableSharedFlow<DashboardTelemetry>(replay = 1)
+        val repository = object : DashboardRepository {
+            override fun observeDashboardTelemetry(): Flow<DashboardTelemetry> = flow
+            override suspend fun refreshTelemetry(): DashboardTelemetry = sampleTelemetry
+            override fun getInitialTelemetry(): DashboardTelemetry? = sampleTelemetry
+        }
+
+        val viewModel = DashboardViewModel(repository, minEntranceDurationMs = 0L)
+
+        // uiState immediately starts in Success with no Loading flash
+        val state = viewModel.uiState.value
+        assertTrue("Expected immediate Success state, but was $state", state is DashboardUiState.Success)
+        assertEquals("Google", (state as DashboardUiState.Success).telemetry.device.manufacturer)
+    }
+
+    @Test
+    fun uiState_withEntranceDelay_startsInInitializing_thenTransitionsToSuccess() = runTest(testDispatcher) {
+        val flow = MutableSharedFlow<DashboardTelemetry>(replay = 1)
+        flow.tryEmit(sampleTelemetry)
+
+        val repository = object : DashboardRepository {
+            override fun observeDashboardTelemetry(): Flow<DashboardTelemetry> = flow
+            override suspend fun refreshTelemetry(): DashboardTelemetry = sampleTelemetry
+            override fun getInitialTelemetry(): DashboardTelemetry? = sampleTelemetry
+        }
+
+        val viewModel = DashboardViewModel(repository, minEntranceDurationMs = 1300L)
+        val collectJob = launch { viewModel.uiState.collect {} }
+
+        // Initially in Initializing state
+        val initialState = viewModel.uiState.value
+        assertTrue("Expected Initializing state, but was $initialState", initialState is DashboardUiState.Initializing)
+
+        // Advance time past entrance duration
+        testScheduler.advanceTimeBy(1301L)
+
+        val finishedState = viewModel.uiState.value
+        assertTrue("Expected Success state after entrance, but was $finishedState", finishedState is DashboardUiState.Success)
+        assertEquals("Google", (finishedState as DashboardUiState.Success).telemetry.device.manufacturer)
+
+        collectJob.cancel()
+    }
 }
+
